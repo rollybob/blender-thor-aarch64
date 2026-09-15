@@ -31,8 +31,10 @@ aarch64 Blender gives you:
 Everything is in `recipe/`. Read `recipe/00-prereqs.md` first, then:
 ```
 # 1. get + patch the source (see 00-prereqs.md for the LFS details - important!)
-git clone https://github.com/blender/blender.git && cd blender
-git checkout v4.5.13
+# GIT_LFS_SKIP_SMUDGE avoids smudging every LFS blob on checkout (a plain clone can hang);
+# we then pull only the datafiles we need.
+GIT_LFS_SKIP_SMUDGE=1 git clone --branch v4.5.13 --single-branch \
+    https://github.com/blender/blender.git && cd blender
 git config lfs.url https://projects.blender.org/blender/blender.git/info/lfs
 git lfs pull --include="release/datafiles/**"
 git am /path/to/this-repo/PATCHES/000*.patch
@@ -65,5 +67,5 @@ via `OIDN_DEVICE_CUDA_API=RuntimeStatic` (dodging a silent `__cudaLaunchKernel` 
 - Blender is **GPL** (GPLv2-or-later; GPLv3 for parts). The corresponding source for any binary here
   is upstream tag **v4.5.13** plus the patches in `PATCHES/` - both are provided.
 - Bundled dependencies keep their own licenses; see `licenses/`.
-- Our own files in this repo (recipe scripts, docs, verify helpers) are provided under CC0/MIT
-  (see LICENSE - to be added).
+- Our own files in this repo (recipe scripts, docs, verify helpers) are dedicated to the public
+  domain under CC0 - see `LICENSE`.
