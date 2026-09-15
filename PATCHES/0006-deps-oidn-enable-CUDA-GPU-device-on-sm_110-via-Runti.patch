@@ -1,0 +1,74 @@
+From 38b84db87403b10b701db8a76a01a77a924598ae Mon Sep 17 00:00:00 2001
+From: Thor aarch64 build <thor-build@localhost>
+Date: Tue, 15 Sep 2026 12:50:21 -0400
+Subject: [PATCH 6/8] deps/oidn: enable CUDA GPU device on sm_110 via
+ RuntimeStatic (CUDA 13)
+
+Enable GPU-OIDN with -DOIDN_DEVICE_CUDA=ON and, crucially,
+-DOIDN_DEVICE_CUDA_API=RuntimeStatic. OIDN's default 'Driver' (curtn.cpp) shim lacks
+__cudaLaunchKernel -- the internal symbol CUDA 13 lowers <<<>>> to -- so device_cuda.so
+fails to dlopen ('undefined symbol: __cudaLaunchKernel') and OIDN SILENTLY falls back
+to CPU. RuntimeStatic links the real libcudart_static.a (which has the symbol).
+Plus sed patches to OIDN's devices/cuda: drop compute_70 (nvcc 13 rejects Volta),
+add native sm_110, retarget the unused sm70 CUTLASS TU to sm_75, widen isSupported()
+109->119 so SM 11.0 is accepted.
+---
+ .../cmake/openimagedenoise.cmake              | 33 ++++++++++++++++++-
+ 1 file changed, 32 insertions(+), 1 deletion(-)
+
+diff --git a/build_files/build_environment/cmake/openimagedenoise.cmake b/build_files/build_environment/cmake/openimagedenoise.cmake
+index 6888111b53c..d0d0b01c821 100644
+--- a/build_files/build_environment/cmake/openimagedenoise.cmake
++++ b/build_files/build_environment/cmake/openimagedenoise.cmake
+@@ -31,9 +31,22 @@ else()
+       -DOIDN_DEVICE_CUDA=ON
+       -DOIDN_DEVICE_HIP=ON)
+   elseif(UNIX)
++    # Thor/CUDA13 GPU-OIDN (enabled 2026-09-15). OIDN builds native cubins only (NO PTX -> no JIT
++    # fallback), so Thor needs a real sm_110 cubin. nvcc 13 rejects compute_70 (Volta) but supports
++    # compute_75..121 incl. sm_110. The arch-list fixups (drop 70, add 110, retarget the never-used
++    # sm70 CUTLASS TU to 75) + the isSupported() widening are applied as sed patches in
++    # ODIN_PATCH_COMMAND below (search "Thor/CUDA13 GPU-OIDN").
+     set(OIDN_EXTRA_ARGS
+       ${OIDN_EXTRA_ARGS}
+-      -DOIDN_DEVICE_CUDA=ON)
++      -DOIDN_DEVICE_CUDA=ON
++      -DCUDAToolkit_ROOT=/usr/local/cuda-13
++      # OIDN's default CUDA API mode is "Driver", which links its own curtn.cpp shim that
++      # reimplements the CUDA runtime on the driver API. That shim predates CUDA 13 and does NOT
++      # provide __cudaLaunchKernel, the internal launch entry point CUDA 13 lowers <<<>>> to. The
++      # module then fails to dlopen (undefined symbol: __cudaLaunchKernel) and OIDN silently falls
++      # back to CPU. Use RuntimeStatic instead: statically link the real CUDA 13 libcudart_static.a
++      # (has __cudaLaunchKernel), keeping the module self-contained (no external libcudart.so).
++      -DOIDN_DEVICE_CUDA_API=RuntimeStatic)
+   endif()
+ endif()
+ 
+@@ -79,6 +92,24 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+   )
+ endif()
+ 
++if(BLENDER_PLATFORM_ARM AND UNIX)
++  # Thor/CUDA13 GPU-OIDN: make OIDN's CUDA device build under CUDA 13 and run on Thor (sm_110).
++  #  1. main engine arch list: drop compute_70 (Volta, rejected by nvcc13), add native sm_110.
++  #  2. sm80 CUTLASS arch list: add sm_110 (Thor uses the smArch>=80 conv path; Blackwell is sm80-class).
++  #  3. sm70 CUTLASS TU: retarget gencode 70->75 so it still compiles+links. It is never called on
++  #     Thor (cuda_conv.cu sends smArch>=80 to getCutlassConvInstances<80>()), so the Turing-arch
++  #     cubin is a harmless dead TU that merely keeps the <70> symbol defined.
++  #  4. isSupported(): stock range excludes 110-119; widen 109->119 so OIDN accepts Thor.
++  set(_OIDN_CUDA_CML ${BUILD_DIR}/openimagedenoise/src/external_openimagedenoise/devices/cuda/CMakeLists.txt)
++  set(_OIDN_CUDA_DEV ${BUILD_DIR}/openimagedenoise/src/external_openimagedenoise/devices/cuda/cuda_device.cpp)
++  set(ODIN_PATCH_COMMAND ${ODIN_PATCH_COMMAND}
++    && sed -i "s/OIDN_CUDA_SM_FLAGS 70 75 80 90 100 120/OIDN_CUDA_SM_FLAGS 75 80 90 100 110 120/" ${_OIDN_CUDA_CML}
++    && sed -i "s/OIDN_CUDA_SM80_FLAGS 80 90 100 120/OIDN_CUDA_SM80_FLAGS 80 90 100 110 120/" ${_OIDN_CUDA_CML}
++    && sed -i "s/OIDN_CUDA_SM70_FLAGS 70)/OIDN_CUDA_SM70_FLAGS 75)/" ${_OIDN_CUDA_CML}
++    && sed -i "s/smArch <= 109/smArch <= 119/" ${_OIDN_CUDA_DEV}
++  )
++endif()
++
+ ExternalProject_Add(external_openimagedenoise
+   URL file://${PACKAGE_DIR}/${OIDN_FILE}
+   DOWNLOAD_DIR ${DOWNLOAD_DIR}
+-- 
+2.43.0
+

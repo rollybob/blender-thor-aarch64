@@ -1,0 +1,19 @@
+CC0 1.0 Universal - Public Domain Dedication
+
+The files in this repository authored by its maintainers - the build recipe
+scripts (recipe/), documentation (README.md, CHANGES-vs-upstream.md,
+licenses/README.md), and verification helpers (verify/) - are dedicated to the
+public domain under CC0 1.0. Do whatever you like with them, no attribution
+required. Full text: https://creativecommons.org/publicdomain/zero/1.0/
+
+THIS DEDICATION DOES NOT COVER:
+
+- PATCHES/  - these are patches to Blender's source and are therefore licensed
+              under Blender's license (GPL), same as the code they modify.
+- licenses/bundled-thirdparty/ - Blender's own third-party license bundle,
+              each item under its respective upstream license.
+- Any Blender source or binary you build/redistribute using this recipe, which
+  remains under the GNU General Public License. See licenses/README.md.
+
+The maintainers of this repository are not affiliated with or endorsed by the
+Blender Foundation. "Blender" is a trademark of the Blender Foundation.

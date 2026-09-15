@@ -1,0 +1,24 @@
+From 1e2c02eee10deb3cbf48c9f95973f021c447f48f Mon Sep 17 00:00:00 2001
+From: Thor aarch64 build <thor-build@localhost>
+Date: Tue, 15 Sep 2026 12:50:20 -0400
+Subject: [PATCH 4/8] deps/wayland: harvest wayland/lib (aarch64) not
+ wayland/lib64
+
+On aarch64 the wayland deps install into lib/, not lib64/; fix the harvest path.
+---
+ build_files/build_environment/cmake/wayland.cmake | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/build_files/build_environment/cmake/wayland.cmake b/build_files/build_environment/cmake/wayland.cmake
+index d2161b4ecac..cda66a914fb 100644
+--- a/build_files/build_environment/cmake/wayland.cmake
++++ b/build_files/build_environment/cmake/wayland.cmake
+@@ -44,4 +44,4 @@ add_dependencies(
+ harvest(external_wayland wayland/bin wayland/bin "wayland-scanner")
+ harvest(external_wayland wayland/include wayland/include "*.h")
+ # Only needed for running the WESTON compositor.
+-harvest(external_wayland wayland/lib64 wayland/lib64 "*")
++harvest(external_wayland wayland/lib wayland/lib "*")  # Thor aarch64: wayland installs to lib, not lib64
+-- 
+2.43.0
+

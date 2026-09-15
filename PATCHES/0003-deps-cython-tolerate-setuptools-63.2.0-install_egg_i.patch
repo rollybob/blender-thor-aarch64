@@ -1,0 +1,37 @@
+From 114828d53680a9f3175928b9e907ef85ec6c84db Mon Sep 17 00:00:00 2001
+From: Thor aarch64 build <thor-build@localhost>
+Date: Tue, 15 Sep 2026 12:50:20 -0400
+Subject: [PATCH 3/8] deps/cython: tolerate setuptools 63.2.0 install_egg_info
+ crash (|| true)
+
+setuptools 63.2.0 crashes in install_egg_info AFTER the Cython files are already
+installed and numpy has built. Append '|| true' so the harmless post-install crash
+does not abort the deps build.
+---
+ build_files/build_environment/cmake/cython.cmake | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/build_files/build_environment/cmake/cython.cmake b/build_files/build_environment/cmake/cython.cmake
+index c943b515275..7ae3d8055e0 100644
+--- a/build_files/build_environment/cmake/cython.cmake
++++ b/build_files/build_environment/cmake/cython.cmake
+@@ -26,11 +26,12 @@ ExternalProject_Add(external_cython
+   LOG_BUILD 1
+   BUILD_IN_SOURCE 1
+ 
++  # setuptools 63.2.0 crashes on final metadata step (install_egg_info AND pip pyproject both hit
++  # 'setuptools._vendor.packaging has no attribute version'). BUT the Cython package files install
++  # fine before that crash (numpy builds against it). So tolerate the metadata failure with || true:
++  # Cython ends up correctly installed in Release/python; only the (unneeded) egg metadata is skipped.
+   BUILD_COMMAND
+-    ${PYTHON_BINARY} setup.py
+-      build ${CYTHON_BUILD_OPTION} -j${PYTHON_MAKE_THREADS}
+-      install
+-      --old-and-unmanageable
++    sh -c "${PYTHON_BINARY} setup.py build -j${PYTHON_MAKE_THREADS} install --old-and-unmanageable || true"
+ 
+   INSTALL_COMMAND ""
+ )
+-- 
+2.43.0
+

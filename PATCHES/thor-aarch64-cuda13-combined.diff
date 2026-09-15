@@ -1,0 +1,176 @@
+diff --git a/build_files/build_environment/CMakeLists.txt b/build_files/build_environment/CMakeLists.txt
+index af93de42f79..238ebb52927 100644
+--- a/build_files/build_environment/CMakeLists.txt
++++ b/build_files/build_environment/CMakeLists.txt
+@@ -71,7 +71,7 @@ endif()
+ include(cmake/tbb.cmake)
+ include(cmake/python.cmake)
+ include(cmake/llvm.cmake)
+-include(cmake/osl.cmake)
++include(cmake/osl.cmake)  # Thor aarch64: re-enabled as CPU-only OSL (OSL_USE_OPTIX gated off for ARM in osl.cmake; sidesteps the CUDA13/clang17 texture_fetch_functions.h GPU-shadeops failure)
+ include(cmake/cython.cmake)
+ include(cmake/numpy.cmake)
+ include(cmake/zstandard.cmake)
+@@ -168,12 +168,12 @@ endif()
+ 
+ if(UNIX AND NOT APPLE)
+   include(cmake/libglu.cmake)
+-  include(cmake/mesa.cmake)
++  # include(cmake/mesa.cmake)  # EXCLUDED on Thor aarch64 (build fail; Blender will use system GL/EGL, headless Cycles needs no bundled mesa)
+   include(cmake/wayland_protocols.cmake)
+   # Can be removed when the build-bot upgrades to v1.20.x or newer.
+   include(cmake/wayland.cmake)
+   include(cmake/wayland_libdecor.cmake)
+-  include(cmake/wayland_weston.cmake)
++  # include(cmake/wayland_weston.cmake)  # EXCLUDED on Thor aarch64 (needs cairo/xcb-randr/libinput; test compositor, not needed headless)
+ endif()
+ include(cmake/shaderc_deps.cmake)
+ include(cmake/shaderc.cmake)
+diff --git a/build_files/build_environment/cmake/cython.cmake b/build_files/build_environment/cmake/cython.cmake
+index c943b515275..7ae3d8055e0 100644
+--- a/build_files/build_environment/cmake/cython.cmake
++++ b/build_files/build_environment/cmake/cython.cmake
+@@ -26,11 +26,12 @@ ExternalProject_Add(external_cython
+   LOG_BUILD 1
+   BUILD_IN_SOURCE 1
+ 
++  # setuptools 63.2.0 crashes on final metadata step (install_egg_info AND pip pyproject both hit
++  # 'setuptools._vendor.packaging has no attribute version'). BUT the Cython package files install
++  # fine before that crash (numpy builds against it). So tolerate the metadata failure with || true:
++  # Cython ends up correctly installed in Release/python; only the (unneeded) egg metadata is skipped.
+   BUILD_COMMAND
+-    ${PYTHON_BINARY} setup.py
+-      build ${CYTHON_BUILD_OPTION} -j${PYTHON_MAKE_THREADS}
+-      install
+-      --old-and-unmanageable
++    sh -c "${PYTHON_BINARY} setup.py build -j${PYTHON_MAKE_THREADS} install --old-and-unmanageable || true"
+ 
+   INSTALL_COMMAND ""
+ )
+diff --git a/build_files/build_environment/cmake/libglu.cmake b/build_files/build_environment/cmake/libglu.cmake
+index e804f0e10e0..fb6da5b5eb5 100644
+--- a/build_files/build_environment/cmake/libglu.cmake
++++ b/build_files/build_environment/cmake/libglu.cmake
+@@ -20,6 +20,7 @@ ExternalProject_Add(external_libglu
+ 
+   CONFIGURE_COMMAND ${CONFIGURE_ENV} &&
+     cd ${BUILD_DIR}/libglu/src/external_libglu/ &&
++    autoreconf -fi &&
+     ${CONFIGURE_COMMAND_NO_TARGET} --prefix=${LIBDIR}/libglu ${LIBGLU_EXTRA_FLAGS}
+ 
+   BUILD_COMMAND ${CONFIGURE_ENV} &&
+diff --git a/build_files/build_environment/cmake/openimagedenoise.cmake b/build_files/build_environment/cmake/openimagedenoise.cmake
+index 6888111b53c..d0d0b01c821 100644
+--- a/build_files/build_environment/cmake/openimagedenoise.cmake
++++ b/build_files/build_environment/cmake/openimagedenoise.cmake
+@@ -31,9 +31,22 @@ else()
+       -DOIDN_DEVICE_CUDA=ON
+       -DOIDN_DEVICE_HIP=ON)
+   elseif(UNIX)
++    # Thor/CUDA13 GPU-OIDN (enabled 2026-09-15). OIDN builds native cubins only (NO PTX -> no JIT
++    # fallback), so Thor needs a real sm_110 cubin. nvcc 13 rejects compute_70 (Volta) but supports
++    # compute_75..121 incl. sm_110. The arch-list fixups (drop 70, add 110, retarget the never-used
++    # sm70 CUTLASS TU to 75) + the isSupported() widening are applied as sed patches in
++    # ODIN_PATCH_COMMAND below (search "Thor/CUDA13 GPU-OIDN").
+     set(OIDN_EXTRA_ARGS
+       ${OIDN_EXTRA_ARGS}
+-      -DOIDN_DEVICE_CUDA=ON)
++      -DOIDN_DEVICE_CUDA=ON
++      -DCUDAToolkit_ROOT=/usr/local/cuda-13
++      # OIDN's default CUDA API mode is "Driver", which links its own curtn.cpp shim that
++      # reimplements the CUDA runtime on the driver API. That shim predates CUDA 13 and does NOT
++      # provide __cudaLaunchKernel, the internal launch entry point CUDA 13 lowers <<<>>> to. The
++      # module then fails to dlopen (undefined symbol: __cudaLaunchKernel) and OIDN silently falls
++      # back to CPU. Use RuntimeStatic instead: statically link the real CUDA 13 libcudart_static.a
++      # (has __cudaLaunchKernel), keeping the module self-contained (no external libcudart.so).
++      -DOIDN_DEVICE_CUDA_API=RuntimeStatic)
+   endif()
+ endif()
+ 
+@@ -79,6 +92,24 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+   )
+ endif()
+ 
++if(BLENDER_PLATFORM_ARM AND UNIX)
++  # Thor/CUDA13 GPU-OIDN: make OIDN's CUDA device build under CUDA 13 and run on Thor (sm_110).
++  #  1. main engine arch list: drop compute_70 (Volta, rejected by nvcc13), add native sm_110.
++  #  2. sm80 CUTLASS arch list: add sm_110 (Thor uses the smArch>=80 conv path; Blackwell is sm80-class).
++  #  3. sm70 CUTLASS TU: retarget gencode 70->75 so it still compiles+links. It is never called on
++  #     Thor (cuda_conv.cu sends smArch>=80 to getCutlassConvInstances<80>()), so the Turing-arch
++  #     cubin is a harmless dead TU that merely keeps the <70> symbol defined.
++  #  4. isSupported(): stock range excludes 110-119; widen 109->119 so OIDN accepts Thor.
++  set(_OIDN_CUDA_CML ${BUILD_DIR}/openimagedenoise/src/external_openimagedenoise/devices/cuda/CMakeLists.txt)
++  set(_OIDN_CUDA_DEV ${BUILD_DIR}/openimagedenoise/src/external_openimagedenoise/devices/cuda/cuda_device.cpp)
++  set(ODIN_PATCH_COMMAND ${ODIN_PATCH_COMMAND}
++    && sed -i "s/OIDN_CUDA_SM_FLAGS 70 75 80 90 100 120/OIDN_CUDA_SM_FLAGS 75 80 90 100 110 120/" ${_OIDN_CUDA_CML}
++    && sed -i "s/OIDN_CUDA_SM80_FLAGS 80 90 100 120/OIDN_CUDA_SM80_FLAGS 80 90 100 110 120/" ${_OIDN_CUDA_CML}
++    && sed -i "s/OIDN_CUDA_SM70_FLAGS 70)/OIDN_CUDA_SM70_FLAGS 75)/" ${_OIDN_CUDA_CML}
++    && sed -i "s/smArch <= 109/smArch <= 119/" ${_OIDN_CUDA_DEV}
++  )
++endif()
++
+ ExternalProject_Add(external_openimagedenoise
+   URL file://${PACKAGE_DIR}/${OIDN_FILE}
+   DOWNLOAD_DIR ${DOWNLOAD_DIR}
+diff --git a/build_files/build_environment/cmake/osl.cmake b/build_files/build_environment/cmake/osl.cmake
+index f629c964908..5758ff49298 100644
+--- a/build_files/build_environment/cmake/osl.cmake
++++ b/build_files/build_environment/cmake/osl.cmake
+@@ -55,7 +55,15 @@ set(OSL_EXTRA_ARGS
+   -Dlibdeflate_DIR=${LIBDIR}/deflate/lib/cmake/libdeflate
+ )
+ 
+-if(NOT (APPLE OR BLENDER_PLATFORM_WINDOWS_ARM))
++# Thor aarch64 (BLENDER_PLATFORM_ARM): build CPU-only OSL, i.e. leave OSL_USE_OPTIX at its
++# upstream default of OFF. The OptiX/CUDA shadeops path compiles OSL's shadeops to PTX via
++# clang (LLVM_COMPILE_CUDA), which on CUDA 13 + our clang 17 breaks inside the CUDA runtime
++# header texture_fetch_functions.h. It is also useless here: Jetson has no OptiX runtime,
++# Blender is built WITH_CYCLES_DEVICE_OPTIX=OFF, and Cycles on the CUDA (non-OptiX) device
++# runs OSL on the CPU only. With OSL_USE_OPTIX=OFF, find_package(CUDA) is never called, so
++# the CUDA_FOUND-gated block in src/liboslexec/CMakeLists.txt is skipped and only the CPU
++# LLVM-bitcode path (USE_LLVM_BITCODE=ON) is compiled.
++if(NOT (APPLE OR BLENDER_PLATFORM_WINDOWS_ARM OR BLENDER_PLATFORM_ARM))
+   list(APPEND OSL_EXTRA_ARGS
+     -DOSL_USE_OPTIX=ON
+     -DCUDA_TARGET_ARCH=sm_50
+diff --git a/build_files/build_environment/cmake/sqlite.cmake b/build_files/build_environment/cmake/sqlite.cmake
+index 57c3f0fb97f..cc90c55cfa1 100644
+--- a/build_files/build_environment/cmake/sqlite.cmake
++++ b/build_files/build_environment/cmake/sqlite.cmake
+@@ -62,6 +62,7 @@ ExternalProject_Add(external_sqlite
+ 
+   CONFIGURE_COMMAND ${SQLITE_CONFIGURE_ENV} &&
+     cd ${BUILD_DIR}/sqlite/src/external_sqlite/ &&
++    autoreconf -fi &&
+     ${CONFIGURE_COMMAND} --prefix=${LIBDIR}/sqlite ${SQLITE_CONFIGURATION_ARGS}
+ 
+   BUILD_COMMAND ${CONFIGURE_ENV} &&
+diff --git a/build_files/build_environment/cmake/wayland.cmake b/build_files/build_environment/cmake/wayland.cmake
+index d2161b4ecac..cda66a914fb 100644
+--- a/build_files/build_environment/cmake/wayland.cmake
++++ b/build_files/build_environment/cmake/wayland.cmake
+@@ -44,4 +44,4 @@ add_dependencies(
+ harvest(external_wayland wayland/bin wayland/bin "wayland-scanner")
+ harvest(external_wayland wayland/include wayland/include "*.h")
+ # Only needed for running the WESTON compositor.
+-harvest(external_wayland wayland/lib64 wayland/lib64 "*")
++harvest(external_wayland wayland/lib wayland/lib "*")  # Thor aarch64: wayland installs to lib, not lib64
+diff --git a/build_files/cmake/platform/platform_unix.cmake b/build_files/cmake/platform/platform_unix.cmake
+index 290a0e679fe..6cb5f6b55ce 100644
+--- a/build_files/cmake/platform/platform_unix.cmake
++++ b/build_files/cmake/platform/platform_unix.cmake
+@@ -325,6 +325,14 @@ if(WITH_CODEC_FFMPEG)
+   endif()
+   find_package(FFmpeg)
+ 
++  # Thor aarch64: our deps-ffmpeg was built with DRM/kmsgrab support (libdrm present at deps-build
++  # time), so its static libavdevice/libavutil reference libdrm symbols. Blender's stock component
++  # list omits drm (their ffmpeg disables kmsgrab). Append system libdrm AFTER the ffmpeg static
++  # libs to resolve the undefined references at final link.
++  if(FFMPEG_FOUND)
++    list(APPEND FFMPEG_LIBRARIES drm)
++  endif()
++
+   set_and_warn_library_found("FFmpeg" FFMPEG_FOUND WITH_CODEC_FFMPEG)
+ endif()
+ 
