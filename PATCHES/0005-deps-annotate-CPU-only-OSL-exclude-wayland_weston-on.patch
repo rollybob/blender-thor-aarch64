@@ -1,0 +1,39 @@
+From 4c2aab6ca1c8b0bccdb4e563330e47b6566ff43a Mon Sep 17 00:00:00 2001
+From: Thor aarch64 build <thor-build@localhost>
+Date: Sun, 20 Sep 2026 19:10:07 -0400
+Subject: [PATCH 5/8] deps: annotate CPU-only OSL; exclude wayland_weston on
+ aarch64
+
+Document why osl.cmake is CPU-only (see osl patch). Exclude the wayland_weston
+test compositor (needs cairo/xcb-randr/libinput; not needed for headless
+Cycles/EEVEE). Note: libglu.cmake and mesa.cmake -- excluded in the 4.5 recipe --
+were dropped upstream in Blender 5.x, so only the weston exclusion remains.
+---
+ build_files/build_environment/CMakeLists.txt | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/build_files/build_environment/CMakeLists.txt b/build_files/build_environment/CMakeLists.txt
+index be01fba956b..8d310692a24 100644
+--- a/build_files/build_environment/CMakeLists.txt
++++ b/build_files/build_environment/CMakeLists.txt
+@@ -70,7 +70,7 @@ endif()
+ include(cmake/tbb.cmake)
+ include(cmake/python.cmake)
+ include(cmake/llvm.cmake)
+-include(cmake/osl.cmake)
++include(cmake/osl.cmake)  # Thor aarch64: CPU-only OSL (OSL_USE_OPTIX gated off for ARM in osl.cmake; sidesteps the CUDA13/clang17 texture_fetch_functions.h GPU-shadeops failure)
+ include(cmake/cython.cmake)
+ include(cmake/numpy.cmake)
+ include(cmake/zstandard.cmake)
+@@ -169,7 +169,7 @@ if(UNIX AND NOT APPLE)
+   include(cmake/wayland_protocols.cmake)
+   # Can be removed when the build-bot upgrades to v1.20.x or newer.
+   include(cmake/wayland.cmake)
+-  include(cmake/wayland_weston.cmake)
++  # include(cmake/wayland_weston.cmake)  # EXCLUDED on Thor aarch64 (needs cairo/xcb-randr/libinput; test compositor, not needed headless)
+ endif()
+ include(cmake/shaderc_deps.cmake)
+ include(cmake/shaderc.cmake)
+-- 
+2.43.0
+

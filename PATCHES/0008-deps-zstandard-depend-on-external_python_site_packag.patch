@@ -1,0 +1,36 @@
+From 742959221383273b770b4443587a134163853e16 Mon Sep 17 00:00:00 2001
+From: Thor aarch64 build <thor-build@localhost>
+Date: Sun, 20 Sep 2026 19:39:43 -0400
+Subject: [PATCH 8/8] deps/zstandard: depend on external_python_site_packages
+ (for 'packaging')
+
+zstandard 0.25.0's setup.py does 'from packaging.version import Version'. The
+'packaging' module is installed into the deps Python by
+external_python_site_packages, but external_zstandard's add_dependencies lists
+only external_python and external_zstd. Under a parallel deps build zstandard can
+run before packaging is installed and fail with ModuleNotFoundError. numpy and
+cython (also built as separate externals) already declare this edge; zstandard
+should too.
+---
+ build_files/build_environment/cmake/zstandard.cmake | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/build_files/build_environment/cmake/zstandard.cmake b/build_files/build_environment/cmake/zstandard.cmake
+index ad7570153d7..0adbe9e096a 100644
+--- a/build_files/build_environment/cmake/zstandard.cmake
++++ b/build_files/build_environment/cmake/zstandard.cmake
+@@ -41,5 +41,11 @@ ExternalProject_Add(external_zstandard
+ add_dependencies(
+   external_zstandard
+   external_python
++  # zstandard's setup.py does `from packaging.version import Version`, and `packaging` is installed
++  # into the deps Python by external_python_site_packages. Upstream 5.2 omits this edge (numpy and
++  # cython, also built as separate externals, both declare it) so under a parallel deps build
++  # zstandard can run before packaging is installed and fail: ModuleNotFoundError: No module named
++  # 'packaging'.
++  external_python_site_packages
+   external_zstd
+ )
+-- 
+2.43.0
+

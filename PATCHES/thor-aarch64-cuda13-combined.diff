@@ -1,33 +1,27 @@
 diff --git a/build_files/build_environment/CMakeLists.txt b/build_files/build_environment/CMakeLists.txt
-index af93de42f79..238ebb52927 100644
+index be01fba956b..8d310692a24 100644
 --- a/build_files/build_environment/CMakeLists.txt
 +++ b/build_files/build_environment/CMakeLists.txt
-@@ -71,7 +71,7 @@ endif()
+@@ -70,7 +70,7 @@ endif()
  include(cmake/tbb.cmake)
  include(cmake/python.cmake)
  include(cmake/llvm.cmake)
 -include(cmake/osl.cmake)
-+include(cmake/osl.cmake)  # Thor aarch64: re-enabled as CPU-only OSL (OSL_USE_OPTIX gated off for ARM in osl.cmake; sidesteps the CUDA13/clang17 texture_fetch_functions.h GPU-shadeops failure)
++include(cmake/osl.cmake)  # Thor aarch64: CPU-only OSL (OSL_USE_OPTIX gated off for ARM in osl.cmake; sidesteps the CUDA13/clang17 texture_fetch_functions.h GPU-shadeops failure)
  include(cmake/cython.cmake)
  include(cmake/numpy.cmake)
  include(cmake/zstandard.cmake)
-@@ -168,12 +168,12 @@ endif()
- 
- if(UNIX AND NOT APPLE)
-   include(cmake/libglu.cmake)
--  include(cmake/mesa.cmake)
-+  # include(cmake/mesa.cmake)  # EXCLUDED on Thor aarch64 (build fail; Blender will use system GL/EGL, headless Cycles needs no bundled mesa)
+@@ -169,7 +169,7 @@ if(UNIX AND NOT APPLE)
    include(cmake/wayland_protocols.cmake)
    # Can be removed when the build-bot upgrades to v1.20.x or newer.
    include(cmake/wayland.cmake)
-   include(cmake/wayland_libdecor.cmake)
 -  include(cmake/wayland_weston.cmake)
 +  # include(cmake/wayland_weston.cmake)  # EXCLUDED on Thor aarch64 (needs cairo/xcb-randr/libinput; test compositor, not needed headless)
  endif()
  include(cmake/shaderc_deps.cmake)
  include(cmake/shaderc.cmake)
 diff --git a/build_files/build_environment/cmake/cython.cmake b/build_files/build_environment/cmake/cython.cmake
-index c943b515275..7ae3d8055e0 100644
+index 3c16032d094..d6d682c617c 100644
 --- a/build_files/build_environment/cmake/cython.cmake
 +++ b/build_files/build_environment/cmake/cython.cmake
 @@ -26,11 +26,12 @@ ExternalProject_Add(external_cython
@@ -47,64 +41,50 @@ index c943b515275..7ae3d8055e0 100644
  
    INSTALL_COMMAND ""
  )
-diff --git a/build_files/build_environment/cmake/libglu.cmake b/build_files/build_environment/cmake/libglu.cmake
-index e804f0e10e0..fb6da5b5eb5 100644
---- a/build_files/build_environment/cmake/libglu.cmake
-+++ b/build_files/build_environment/cmake/libglu.cmake
-@@ -20,6 +20,7 @@ ExternalProject_Add(external_libglu
- 
-   CONFIGURE_COMMAND ${CONFIGURE_ENV} &&
-     cd ${BUILD_DIR}/libglu/src/external_libglu/ &&
-+    autoreconf -fi &&
-     ${CONFIGURE_COMMAND_NO_TARGET} --prefix=${LIBDIR}/libglu ${LIBGLU_EXTRA_FLAGS}
- 
-   BUILD_COMMAND ${CONFIGURE_ENV} &&
 diff --git a/build_files/build_environment/cmake/openimagedenoise.cmake b/build_files/build_environment/cmake/openimagedenoise.cmake
-index 6888111b53c..d0d0b01c821 100644
+index 2ddcbd630d1..9c79275e11b 100644
 --- a/build_files/build_environment/cmake/openimagedenoise.cmake
 +++ b/build_files/build_environment/cmake/openimagedenoise.cmake
-@@ -31,9 +31,22 @@ else()
+@@ -31,9 +31,18 @@ else()
        -DOIDN_DEVICE_CUDA=ON
        -DOIDN_DEVICE_HIP=ON)
    elseif(UNIX)
-+    # Thor/CUDA13 GPU-OIDN (enabled 2026-09-15). OIDN builds native cubins only (NO PTX -> no JIT
-+    # fallback), so Thor needs a real sm_110 cubin. nvcc 13 rejects compute_70 (Volta) but supports
-+    # compute_75..121 incl. sm_110. The arch-list fixups (drop 70, add 110, retarget the never-used
-+    # sm70 CUTLASS TU to 75) + the isSupported() widening are applied as sed patches in
-+    # ODIN_PATCH_COMMAND below (search "Thor/CUDA13 GPU-OIDN").
++    # Thor/CUDA13 GPU-OIDN (5.2 / OIDN 2.5.0): enable the CUDA device on aarch64.
      set(OIDN_EXTRA_ARGS
        ${OIDN_EXTRA_ARGS}
 -      -DOIDN_DEVICE_CUDA=ON)
 +      -DOIDN_DEVICE_CUDA=ON
 +      -DCUDAToolkit_ROOT=/usr/local/cuda-13
-+      # OIDN's default CUDA API mode is "Driver", which links its own curtn.cpp shim that
-+      # reimplements the CUDA runtime on the driver API. That shim predates CUDA 13 and does NOT
-+      # provide __cudaLaunchKernel, the internal launch entry point CUDA 13 lowers <<<>>> to. The
-+      # module then fails to dlopen (undefined symbol: __cudaLaunchKernel) and OIDN silently falls
-+      # back to CPU. Use RuntimeStatic instead: statically link the real CUDA 13 libcudart_static.a
-+      # (has __cudaLaunchKernel), keeping the module self-contained (no external libcudart.so).
++      # OIDN's default CUDA API mode is "Driver", which links its curtn.cpp shim that reimplements
++      # the CUDA runtime on the driver API. That shim predates CUDA 13 and does NOT provide
++      # __cudaLaunchKernel, the internal launch entry point CUDA 13 lowers <<<>>> to. The module
++      # then fails to dlopen (undefined symbol: __cudaLaunchKernel) and OIDN silently falls back to
++      # CPU. Use RuntimeStatic: statically link the real CUDA 13 libcudart_static.a (has the symbol),
++      # keeping the module self-contained.
 +      -DOIDN_DEVICE_CUDA_API=RuntimeStatic)
    endif()
- endif()
  
-@@ -79,6 +92,24 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+ 
+@@ -100,6 +109,26 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
    )
  endif()
  
 +if(BLENDER_PLATFORM_ARM AND UNIX)
-+  # Thor/CUDA13 GPU-OIDN: make OIDN's CUDA device build under CUDA 13 and run on Thor (sm_110).
-+  #  1. main engine arch list: drop compute_70 (Volta, rejected by nvcc13), add native sm_110.
-+  #  2. sm80 CUTLASS arch list: add sm_110 (Thor uses the smArch>=80 conv path; Blackwell is sm80-class).
-+  #  3. sm70 CUTLASS TU: retarget gencode 70->75 so it still compiles+links. It is never called on
-+  #     Thor (cuda_conv.cu sends smArch>=80 to getCutlassConvInstances<80>()), so the Turing-arch
-+  #     cubin is a harmless dead TU that merely keeps the <70> symbol defined.
-+  #  4. isSupported(): stock range excludes 110-119; widen 109->119 so OIDN accepts Thor.
++  # Thor/CUDA13 GPU-OIDN (OIDN 2.5.0): make the CUDA device build for and accept Thor (sm_110).
++  #  1. main engine arch list (cuda_conv/device/engine): add native sm_110. gencode here is
++  #     code=sm_<v> only (NO PTX -> no JIT fallback), so Thor needs a real sm_110 cubin.
++  #  2. sm80 CUTLASS arch list: add sm_110 (Blackwell uses the smArch>=80 conv path). The sm75
++  #     CUTLASS TU is left as-is: nvcc 13 compiles compute_75 fine and Thor never calls the <75>
++  #     conv path, so it is a harmless dead TU that keeps the <75> symbols defined.
++  #  3. isSupported(): stock 2.5.0 accepts 75..109 and 120..129, excluding Thor's 110; widen the
++  #     first range's upper bound 109 -> 119 so OIDN accepts sm_110.
++  # (OIDN 2.3.3's compute_70 drop / sm70->sm75 retarget from the 4.5 recipe is obsolete here: 2.5.0
++  #  already ships no sm70 TU and no compute_70 in its default flags.)
 +  set(_OIDN_CUDA_CML ${BUILD_DIR}/openimagedenoise/src/external_openimagedenoise/devices/cuda/CMakeLists.txt)
 +  set(_OIDN_CUDA_DEV ${BUILD_DIR}/openimagedenoise/src/external_openimagedenoise/devices/cuda/cuda_device.cpp)
-+  set(ODIN_PATCH_COMMAND ${ODIN_PATCH_COMMAND}
-+    && sed -i "s/OIDN_CUDA_SM_FLAGS 70 75 80 90 100 120/OIDN_CUDA_SM_FLAGS 75 80 90 100 110 120/" ${_OIDN_CUDA_CML}
++  set(OIDN_PATCH_COMMAND ${OIDN_PATCH_COMMAND}
++    && sed -i "s/OIDN_CUDA_SM_FLAGS 75 80 90 100 120/OIDN_CUDA_SM_FLAGS 75 80 90 100 110 120/" ${_OIDN_CUDA_CML}
 +    && sed -i "s/OIDN_CUDA_SM80_FLAGS 80 90 100 120/OIDN_CUDA_SM80_FLAGS 80 90 100 110 120/" ${_OIDN_CUDA_CML}
-+    && sed -i "s/OIDN_CUDA_SM70_FLAGS 70)/OIDN_CUDA_SM70_FLAGS 75)/" ${_OIDN_CUDA_CML}
 +    && sed -i "s/smArch <= 109/smArch <= 119/" ${_OIDN_CUDA_DEV}
 +  )
 +endif()
@@ -113,10 +93,10 @@ index 6888111b53c..d0d0b01c821 100644
    URL file://${PACKAGE_DIR}/${OIDN_FILE}
    DOWNLOAD_DIR ${DOWNLOAD_DIR}
 diff --git a/build_files/build_environment/cmake/osl.cmake b/build_files/build_environment/cmake/osl.cmake
-index f629c964908..5758ff49298 100644
+index d5e4ef8ed4f..ded7d5fd356 100644
 --- a/build_files/build_environment/cmake/osl.cmake
 +++ b/build_files/build_environment/cmake/osl.cmake
-@@ -55,7 +55,15 @@ set(OSL_EXTRA_ARGS
+@@ -57,7 +57,15 @@ set(OSL_EXTRA_ARGS
    -Dlibdeflate_DIR=${LIBDIR}/deflate/lib/cmake/libdeflate
  )
  
@@ -133,33 +113,53 @@ index f629c964908..5758ff49298 100644
    list(APPEND OSL_EXTRA_ARGS
      -DOSL_USE_OPTIX=ON
      -DCUDA_TARGET_ARCH=sm_50
-diff --git a/build_files/build_environment/cmake/sqlite.cmake b/build_files/build_environment/cmake/sqlite.cmake
-index 57c3f0fb97f..cc90c55cfa1 100644
---- a/build_files/build_environment/cmake/sqlite.cmake
-+++ b/build_files/build_environment/cmake/sqlite.cmake
-@@ -62,6 +62,7 @@ ExternalProject_Add(external_sqlite
+diff --git a/build_files/build_environment/cmake/vulkan.cmake b/build_files/build_environment/cmake/vulkan.cmake
+index 90ae0d19087..10e28c2ba3d 100644
+--- a/build_files/build_environment/cmake/vulkan.cmake
++++ b/build_files/build_environment/cmake/vulkan.cmake
+@@ -82,6 +82,11 @@ ExternalProject_Add(external_spirv_tools
+ add_dependencies(
+   external_spirv_tools
+   external_spirv_headers
++  # external_spirv_tools configures with -DPython3_EXECUTABLE=${PYTHON_BINARY} and does
++  # find_package(Python3 REQUIRED ... Interpreter), so it must not configure before the deps
++  # Python is built+installed. Upstream 5.2 omits this edge; under a parallel deps build (ninja
++  # -j) spirv_tools can race ahead of external_python and fail with "Cannot run the interpreter".
++  external_python
+ )
  
-   CONFIGURE_COMMAND ${SQLITE_CONFIGURE_ENV} &&
-     cd ${BUILD_DIR}/sqlite/src/external_sqlite/ &&
-+    autoreconf -fi &&
-     ${CONFIGURE_COMMAND} --prefix=${LIBDIR}/sqlite ${SQLITE_CONFIGURATION_ARGS}
- 
-   BUILD_COMMAND ${CONFIGURE_ENV} &&
+ if(UNIX AND NOT APPLE)
 diff --git a/build_files/build_environment/cmake/wayland.cmake b/build_files/build_environment/cmake/wayland.cmake
-index d2161b4ecac..cda66a914fb 100644
+index d8ca63b432b..0ab18324af7 100644
 --- a/build_files/build_environment/cmake/wayland.cmake
 +++ b/build_files/build_environment/cmake/wayland.cmake
-@@ -44,4 +44,4 @@ add_dependencies(
+@@ -42,4 +42,4 @@ add_dependencies(
  harvest(external_wayland wayland/bin wayland/bin "wayland-scanner")
  harvest(external_wayland wayland/include wayland/include "*.h")
  # Only needed for running the WESTON compositor.
 -harvest(external_wayland wayland/lib64 wayland/lib64 "*")
 +harvest(external_wayland wayland/lib wayland/lib "*")  # Thor aarch64: wayland installs to lib, not lib64
+diff --git a/build_files/build_environment/cmake/zstandard.cmake b/build_files/build_environment/cmake/zstandard.cmake
+index ad7570153d7..0adbe9e096a 100644
+--- a/build_files/build_environment/cmake/zstandard.cmake
++++ b/build_files/build_environment/cmake/zstandard.cmake
+@@ -41,5 +41,11 @@ ExternalProject_Add(external_zstandard
+ add_dependencies(
+   external_zstandard
+   external_python
++  # zstandard's setup.py does `from packaging.version import Version`, and `packaging` is installed
++  # into the deps Python by external_python_site_packages. Upstream 5.2 omits this edge (numpy and
++  # cython, also built as separate externals, both declare it) so under a parallel deps build
++  # zstandard can run before packaging is installed and fail: ModuleNotFoundError: No module named
++  # 'packaging'.
++  external_python_site_packages
+   external_zstd
+ )
 diff --git a/build_files/cmake/platform/platform_unix.cmake b/build_files/cmake/platform/platform_unix.cmake
-index 290a0e679fe..6cb5f6b55ce 100644
+index 4719eb4b87e..3155e042f32 100644
 --- a/build_files/cmake/platform/platform_unix.cmake
 +++ b/build_files/cmake/platform/platform_unix.cmake
-@@ -325,6 +325,14 @@ if(WITH_CODEC_FFMPEG)
+@@ -330,6 +330,14 @@ if(WITH_CODEC_FFMPEG)
    endif()
    find_package(FFmpeg)
  

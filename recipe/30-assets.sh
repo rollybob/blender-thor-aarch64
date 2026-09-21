@@ -5,7 +5,7 @@
 # / geometry-node asset libraries are missing from the UI. Fetch the real objects, then reinstall.
 set -euo pipefail
 
-: "${BLENDER_SRC:?set BLENDER_SRC to your patched blender v4.5.13 checkout}"
+: "${BLENDER_SRC:?set BLENDER_SRC to your patched blender v5.2.2 checkout}"
 BLENDER_BUILD="${BLENDER_BUILD:-$HOME/blender-build/blender_bin}"
 
 cd "$BLENDER_SRC"

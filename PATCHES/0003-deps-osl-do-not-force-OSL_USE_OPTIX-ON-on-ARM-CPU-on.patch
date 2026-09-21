@@ -1,24 +1,23 @@
-From 4327791a8fc551f72dea42479c03ae39f10ea828 Mon Sep 17 00:00:00 2001
+From 8c3ebe69405ecc408d40ad7821227f49543410fb Mon Sep 17 00:00:00 2001
 From: Thor aarch64 build <thor-build@localhost>
-Date: Tue, 15 Sep 2026 12:50:20 -0400
-Subject: [PATCH 5/8] deps/osl: do not force OSL_USE_OPTIX=ON on ARM (CPU-only
+Date: Sun, 20 Sep 2026 19:10:06 -0400
+Subject: [PATCH 3/8] deps/osl: do not force OSL_USE_OPTIX=ON on ARM (CPU-only
  OSL)
 
-On BLENDER_PLATFORM_ARM leave OSL_USE_OPTIX at its upstream default (OFF). The OptiX
-path compiles OSL shadeops to PTX via clang (LLVM_COMPILE_CUDA), which breaks on
-CUDA 13 + clang 17 in texture_fetch_functions.h -- and is useless on Jetson (no OptiX
-runtime; Blender is built WITH_CYCLES_DEVICE_OPTIX=OFF, so Cycles runs OSL on CPU).
-With OPTIX off, find_package(CUDA) never runs and the CUDA_FOUND-gated shadeops block
-is skipped; only the CPU LLVM-bitcode path builds.
+Upstream forces OSL's OptiX path on, which compiles OSL shadeops to PTX via
+clang and breaks on CUDA 13 + clang 17 in texture_fetch_functions.h. Pointless
+on Jetson (no OptiX runtime; Blender built WITH_CYCLES_DEVICE_OPTIX=OFF, so
+Cycles runs OSL on CPU). Leaving OSL_USE_OPTIX=OFF skips the CUDA_FOUND-gated
+GPU-shadeops block; only the CPU LLVM-bitcode path builds.
 ---
  build_files/build_environment/cmake/osl.cmake | 10 +++++++++-
  1 file changed, 9 insertions(+), 1 deletion(-)
 
 diff --git a/build_files/build_environment/cmake/osl.cmake b/build_files/build_environment/cmake/osl.cmake
-index f629c964908..5758ff49298 100644
+index d5e4ef8ed4f..ded7d5fd356 100644
 --- a/build_files/build_environment/cmake/osl.cmake
 +++ b/build_files/build_environment/cmake/osl.cmake
-@@ -55,7 +55,15 @@ set(OSL_EXTRA_ARGS
+@@ -57,7 +57,15 @@ set(OSL_EXTRA_ARGS
    -Dlibdeflate_DIR=${LIBDIR}/deflate/lib/cmake/libdeflate
  )
  

@@ -4,7 +4,7 @@
 # (applied to BLENDER_SRC) fixes the aarch64/CUDA-13 breakages; see PATCHES/ and CHANGES-vs-upstream.md.
 set -euo pipefail
 
-: "${BLENDER_SRC:?set BLENDER_SRC to your patched blender v4.5.13 checkout}"
+: "${BLENDER_SRC:?set BLENDER_SRC to your patched blender v5.2.2 checkout}"
 DEPS_BUILD="${DEPS_BUILD:-$HOME/blender-build/deps_arm64}"
 LIBDIR="${LIBDIR:-$BLENDER_SRC/lib/linux_arm64}"
 CUDA="${CUDA:-/usr/local/cuda-13}"

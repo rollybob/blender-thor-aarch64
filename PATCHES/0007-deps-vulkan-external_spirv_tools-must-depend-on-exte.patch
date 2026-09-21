@@ -1,0 +1,38 @@
+From 1723b075221e3898dabb905156642b1b687d689c Mon Sep 17 00:00:00 2001
+From: Thor aarch64 build <thor-build@localhost>
+Date: Sun, 20 Sep 2026 19:30:10 -0400
+Subject: [PATCH 7/8] deps/vulkan: external_spirv_tools must depend on
+ external_python
+
+external_spirv_tools configures with -DPython3_EXECUTABLE=${PYTHON_BINARY} and
+does find_package(Python3 REQUIRED COMPONENTS Interpreter), but its
+add_dependencies() lists only external_spirv_headers -- not external_python.
+Under a parallel deps build (ninja -j3) spirv_tools' configure can run before the
+deps Python is built and fail: 'Could NOT find Python3 (missing: Interpreter) ...
+Cannot run the interpreter .../Release/python/bin/python3.13'. shaderc.cmake
+already declares this edge; spirv_tools should too. (sndfile/nanobind also pass
+python at configure but do not hard-require a runnable interpreter, so they are
+unaffected.)
+---
+ build_files/build_environment/cmake/vulkan.cmake | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/build_files/build_environment/cmake/vulkan.cmake b/build_files/build_environment/cmake/vulkan.cmake
+index 90ae0d19087..10e28c2ba3d 100644
+--- a/build_files/build_environment/cmake/vulkan.cmake
++++ b/build_files/build_environment/cmake/vulkan.cmake
+@@ -82,6 +82,11 @@ ExternalProject_Add(external_spirv_tools
+ add_dependencies(
+   external_spirv_tools
+   external_spirv_headers
++  # external_spirv_tools configures with -DPython3_EXECUTABLE=${PYTHON_BINARY} and does
++  # find_package(Python3 REQUIRED ... Interpreter), so it must not configure before the deps
++  # Python is built+installed. Upstream 5.2 omits this edge; under a parallel deps build (ninja
++  # -j) spirv_tools can race ahead of external_python and fail with "Cannot run the interpreter".
++  external_python
+ )
+ 
+ if(UNIX AND NOT APPLE)
+-- 
+2.43.0
+

@@ -1,18 +1,18 @@
-From 114828d53680a9f3175928b9e907ef85ec6c84db Mon Sep 17 00:00:00 2001
+From 5d2982ca7316d092b0dae2a59f9efeca747aea1c Mon Sep 17 00:00:00 2001
 From: Thor aarch64 build <thor-build@localhost>
-Date: Tue, 15 Sep 2026 12:50:20 -0400
-Subject: [PATCH 3/8] deps/cython: tolerate setuptools 63.2.0 install_egg_info
+Date: Sun, 20 Sep 2026 19:10:06 -0400
+Subject: [PATCH 1/8] deps/cython: tolerate setuptools 63.2.0 install_egg_info
  crash (|| true)
 
-setuptools 63.2.0 crashes in install_egg_info AFTER the Cython files are already
-installed and numpy has built. Append '|| true' so the harmless post-install crash
-does not abort the deps build.
+setuptools 63.2.0 crashes in install_egg_info AFTER Cython's files are installed
+and numpy has built. Append || true so the deps build continues past the
+harmless post-install crash.
 ---
  build_files/build_environment/cmake/cython.cmake | 9 +++++----
  1 file changed, 5 insertions(+), 4 deletions(-)
 
 diff --git a/build_files/build_environment/cmake/cython.cmake b/build_files/build_environment/cmake/cython.cmake
-index c943b515275..7ae3d8055e0 100644
+index 3c16032d094..d6d682c617c 100644
 --- a/build_files/build_environment/cmake/cython.cmake
 +++ b/build_files/build_environment/cmake/cython.cmake
 @@ -26,11 +26,12 @@ ExternalProject_Add(external_cython

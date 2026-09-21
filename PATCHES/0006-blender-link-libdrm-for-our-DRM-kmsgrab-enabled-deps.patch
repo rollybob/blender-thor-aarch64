@@ -1,23 +1,20 @@
-From 95c2cedb4c618443c50e3dc44f42d2d8a3476f31 Mon Sep 17 00:00:00 2001
+From 4f4b5da91bde00eb23592d5eb57b753cc79b7ca7 Mon Sep 17 00:00:00 2001
 From: Thor aarch64 build <thor-build@localhost>
-Date: Tue, 15 Sep 2026 12:50:21 -0400
-Subject: [PATCH 8/8] blender: link libdrm for our DRM/kmsgrab-enabled
+Date: Sun, 20 Sep 2026 19:10:07 -0400
+Subject: [PATCH 6/8] blender: link libdrm for our DRM/kmsgrab-enabled
  deps-ffmpeg
 
-Our deps-ffmpeg is built with DRM/kmsgrab, leaving undefined drm* refs at Blender's
-final link. Append 'drm' to FFMPEG_LIBRARIES after find_package(FFmpeg) (and apt
-install libdrm-dev). Note: -DLIBDIR must be passed explicitly at configure time
-because this file only auto-detects the libdir when it carries a .git submodule
-marker, which a harvested lib/ tree does not have.
+Our deps ffmpeg is built with DRM/kmsgrab; link libdrm so the Blender link step
+resolves the DRM symbols.
 ---
  build_files/cmake/platform/platform_unix.cmake | 8 ++++++++
  1 file changed, 8 insertions(+)
 
 diff --git a/build_files/cmake/platform/platform_unix.cmake b/build_files/cmake/platform/platform_unix.cmake
-index 290a0e679fe..6cb5f6b55ce 100644
+index 4719eb4b87e..3155e042f32 100644
 --- a/build_files/cmake/platform/platform_unix.cmake
 +++ b/build_files/cmake/platform/platform_unix.cmake
-@@ -325,6 +325,14 @@ if(WITH_CODEC_FFMPEG)
+@@ -330,6 +330,14 @@ if(WITH_CODEC_FFMPEG)
    endif()
    find_package(FFmpeg)
  
