@@ -1,0 +1,44 @@
+From 16cd49835e7a4ec566ec6516916146d8236db8be Mon Sep 17 00:00:00 2001
+From: Thor aarch64 build <thor-build@localhost>
+Date: Sun, 11 Oct 2026 11:54:04 -0400
+Subject: [PATCH 09/11] Fix: Cycles: instanced objects invisible in BVH2 on
+ aarch64 GCC builds
+
+BVH2::pack_instances patched .x/.y of a copied int4 leaf in place. With
+int4 being an sse2neon __m128i union, GCC 14 (aarch64, -O2) vectorized
+that as a 64-bit 'add v.2s' followed by a 128-bit store, which zeroes
+.z (visibility) and .w (primitive type) of every merged leaf. Traversal
+then matches no primitive type and silently skips all instanced geometry
+(linked duplicates, motion blurred and subsurface objects) on CUDA and on
+CPU with the BVH2 layout. Build the merged leaf with make_int4 instead.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ intern/cycles/bvh/bvh2.cpp | 11 +++++++----
+ 1 file changed, 7 insertions(+), 4 deletions(-)
+
+diff --git a/intern/cycles/bvh/bvh2.cpp b/intern/cycles/bvh/bvh2.cpp
+index 24df34f6383..b086fcdbb51 100644
+--- a/intern/cycles/bvh/bvh2.cpp
++++ b/intern/cycles/bvh/bvh2.cpp
+@@ -588,10 +588,13 @@ void BVH2::pack_instances(size_t nodes_size, size_t leaf_nodes_size)
+       int4 *leaf_nodes_offset = bvh->pack.leaf_nodes.data();
+       const size_t leaf_nodes_offset_size = bvh->pack.leaf_nodes.size();
+       for (size_t i = 0; i < leaf_nodes_offset_size; i += BVH_NODE_LEAF_SIZE) {
+-        int4 data = leaf_nodes_offset[i];
+-        data.x += prim_offset;
+-        data.y += prim_offset;
+-        pack_leaf_nodes[pack_leaf_nodes_offset] = data;
++        /* Build the merged leaf from explicit lanes instead of patching .x/.y of a copy in place:
++         * GCC 14 on aarch64 (int4 = sse2neon __m128i union) vectorized the in-place version as a
++         * 64-bit `add v.2s` followed by a 128-bit store, which zeroes .z (visibility) and .w
++         * (primitive type) of every instanced leaf -> all instanced objects invisible in BVH2. */
++        const int4 src = leaf_nodes_offset[i];
++        pack_leaf_nodes[pack_leaf_nodes_offset] = make_int4(
++            src.x + int(prim_offset), src.y + int(prim_offset), src.z, src.w);
+         for (int j = 1; j < BVH_NODE_LEAF_SIZE; ++j) {
+           pack_leaf_nodes[pack_leaf_nodes_offset + j] = leaf_nodes_offset[i + j];
+         }
+-- 
+2.43.0
+

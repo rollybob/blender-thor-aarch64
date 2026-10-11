@@ -1,0 +1,129 @@
+From b486255e5c95002ba3e5d08b85e67d8458c35f04 Mon Sep 17 00:00:00 2001
+From: Thor aarch64 build <thor-build@localhost>
+Date: Sat, 10 Oct 2026 20:15:39 -0400
+Subject: [PATCH 10/11] Cycles CUDA: opt-in Thor (sm_110) launch tuning for
+ intersect and shade kernels
+
+All opt-in; unset = stock behavior and stock binaries.
+- device/cuda/kernel.cpp: env CYCLES_CUDA_INTERSECT_BLOCK overrides the block size of
+  the integrator_intersect_* kernels (no shared memory, any multiple of 32 is valid).
+- kernel/device/cuda/config.h + kernel/device/gpu/kernel.h: compile-time
+  THOR_INTERSECT_MIN_BLOCKS gives intersect_closest/intersect_shadow
+  __launch_bounds__(64, N); THOR_SHADE_BLOCK + THOR_SHADE_MIN_BLOCKS do the same for
+  shade_surface. Other backends keep the stock declaration.
+
+Why: on Thor the BVH intersect kernels are latency-bound with too few warps in flight
+(ncu: 15% achieved occupancy vs 33% register-limited, long_scoreboard dominant, memory
+system 7% busy). Capping registers (intersect 64, shade_surface 80), measured with the
+BVH2 instancing fix (0009) applied: Open Data +20/+39/+37% (monster/junkshop/classroom,
+total +30%); fixed-sample renders 1.04-1.35x faster on 7 scenes incl. hair, volumes, SSS
+and motion blur, never slower; image differences equal stock-vs-stock run-to-run noise.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ intern/cycles/device/cuda/kernel.cpp      | 16 ++++++++++++++++
+ intern/cycles/kernel/device/cuda/config.h | 13 +++++++++++++
+ intern/cycles/kernel/device/gpu/kernel.h  | 15 ++++++++++++---
+ 3 files changed, 41 insertions(+), 3 deletions(-)
+
+diff --git a/intern/cycles/device/cuda/kernel.cpp b/intern/cycles/device/cuda/kernel.cpp
+index 0ca33d0a190..6755c19ac62 100644
+--- a/intern/cycles/device/cuda/kernel.cpp
++++ b/intern/cycles/device/cuda/kernel.cpp
+@@ -7,6 +7,10 @@
+ #  include "device/cuda/kernel.h"
+ #  include "device/cuda/device_impl.h"
+ 
++#  include <cstdlib>
++
++#  include "util/string.h"
++
+ CCL_NAMESPACE_BEGIN
+ 
+ void CUDADeviceKernels::load(CUDADevice *device)
+@@ -32,6 +36,18 @@ void CUDADeviceKernels::load(CUDADevice *device)
+           device,
+           cuOccupancyMaxPotentialBlockSize(
+               &kernel.min_blocks, &kernel.num_threads_per_block, kernel.function, nullptr, 0, 0));
++
++      /* THOR experiment, opt-in: smaller blocks for the BVH intersect kernels.
++       * Divergent rays keep a whole block resident until its slowest warp finishes, so on Thor
++       * achieved occupancy is half the register-limited maximum (ncu: 15% vs 33% on junkshop).
++       * These kernels use no shared memory, so any multiple of 32 is valid. Unset = stock. */
++      const char *thor_block = getenv("CYCLES_CUDA_INTERSECT_BLOCK");
++      if (thor_block && string_startswith(function_name, "kernel_gpu_integrator_intersect_")) {
++        const int block = atoi(thor_block);
++        if (block >= 32 && block % 32 == 0 && block <= kernel.num_threads_per_block) {
++          kernel.num_threads_per_block = block;
++        }
++      }
+     }
+     else {
+       LOG_ERROR << "Unable to load kernel " << function_name;
+diff --git a/intern/cycles/kernel/device/cuda/config.h b/intern/cycles/kernel/device/cuda/config.h
+index 2fda2a6c4dc..8fee2f0cc9a 100644
+--- a/intern/cycles/kernel/device/cuda/config.h
++++ b/intern/cycles/kernel/device/cuda/config.h
+@@ -45,6 +45,19 @@
+ #  error "Unknown or unsupported CUDA architecture, can't determine launch bounds"
+ #endif
+ 
++/* THOR experiment, compile-time opt-in: 64-thread blocks with a minimum of N resident blocks
++ * per SM for the BVH intersect kernels, i.e. a register cap of 65536 / (64 * N) -> more warps in flight to hide
++ * the memory latency ncu shows (junkshop: 15% achieved occupancy, long_scoreboard dominant). Unset = stock. */
++#ifdef THOR_INTERSECT_MIN_BLOCKS
++#  define ccl_gpu_kernel_thor_intersect \
++    extern "C" __global__ void __launch_bounds__(64, THOR_INTERSECT_MIN_BLOCKS)
++#endif
++/* Same idea for integrator_shade_surface (stock: 162 regs, 384-thread blocks -> 12 warps/SM). */
++#if defined(THOR_SHADE_BLOCK) && defined(THOR_SHADE_MIN_BLOCKS)
++#  define ccl_gpu_kernel_thor_shade \
++    extern "C" __global__ void __launch_bounds__(THOR_SHADE_BLOCK, THOR_SHADE_MIN_BLOCKS)
++#endif
++
+ /* Compute number of threads per block and minimum blocks per multiprocessor
+  * given the maximum number of registers per thread. */
+ #define ccl_gpu_kernel(block_num_threads, thread_num_registers) \
+diff --git a/intern/cycles/kernel/device/gpu/kernel.h b/intern/cycles/kernel/device/gpu/kernel.h
+index 784b1fad284..96b533ec70b 100644
+--- a/intern/cycles/kernel/device/gpu/kernel.h
++++ b/intern/cycles/kernel/device/gpu/kernel.h
+@@ -155,7 +155,16 @@ ccl_gpu_kernel_postfix
+ #    include "kernel/device/oneapi/context_intersect_begin.h"
+ #  endif
+ 
+-ccl_gpu_kernel(GPU_KERNEL_BLOCK_NUM_THREADS, GPU_KERNEL_MAX_REGISTERS)
++/* THOR experiment: the two hot BVH intersect kernels can get their own launch bounds
++ * (see cuda/config.h). Every other backend / unset = the stock declaration. */
++#ifndef ccl_gpu_kernel_thor_intersect
++#  define ccl_gpu_kernel_thor_intersect ccl_gpu_kernel(GPU_KERNEL_BLOCK_NUM_THREADS, GPU_KERNEL_MAX_REGISTERS)
++#endif
++#ifndef ccl_gpu_kernel_thor_shade
++#  define ccl_gpu_kernel_thor_shade ccl_gpu_kernel(GPU_KERNEL_BLOCK_NUM_THREADS, GPU_KERNEL_MAX_REGISTERS)
++#endif
++
++ccl_gpu_kernel_thor_intersect
+     ccl_gpu_kernel_signature(integrator_intersect_closest,
+                              const ccl_global int *path_index_array,
+                              ccl_global float *render_buffer,
+@@ -170,7 +179,7 @@ ccl_gpu_kernel(GPU_KERNEL_BLOCK_NUM_THREADS, GPU_KERNEL_MAX_REGISTERS)
+ }
+ ccl_gpu_kernel_postfix
+ 
+-ccl_gpu_kernel(GPU_KERNEL_BLOCK_NUM_THREADS, GPU_KERNEL_MAX_REGISTERS)
++ccl_gpu_kernel_thor_intersect
+     ccl_gpu_kernel_signature(integrator_intersect_shadow,
+                              const ccl_global int *path_index_array,
+                              const int work_size)
+@@ -310,7 +319,7 @@ ccl_gpu_kernel(GPU_KERNEL_BLOCK_NUM_THREADS, GPU_KERNEL_MAX_REGISTERS)
+ }
+ ccl_gpu_kernel_postfix
+ 
+-ccl_gpu_kernel(GPU_KERNEL_BLOCK_NUM_THREADS, GPU_KERNEL_MAX_REGISTERS)
++ccl_gpu_kernel_thor_shade
+     ccl_gpu_kernel_signature(integrator_shade_surface,
+                              const ccl_global int *path_index_array,
+                              ccl_global float *render_buffer,
+-- 
+2.43.0
+

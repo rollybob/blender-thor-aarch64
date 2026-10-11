@@ -1,6 +1,6 @@
 # What we changed vs upstream Blender v5.2.2, and why
 
-The source delta is small (8 patches; see `PATCHES/`). Each fix corresponds to a concrete wall hit
+The source delta is small (11 patches; see `PATCHES/`; 0009-0011 added in release r2). Each fix corresponds to a concrete wall hit
 when building Blender with CUDA-Cycles + OIDN + OSL + Vulkan on Jetson Thor (Blackwell sm_110,
 JetPack 7, CUDA 13, Ubuntu 24.04 aarch64). The Cycles CUDA arch selection, the Vulkan/HarfBuzz/FriBidi
 feature flags, and the GCC-14 compiler pin are **not** source patches - they are configure flags set
@@ -60,6 +60,43 @@ into the deps Python by `external_python_site_packages`, but `external_zstandard
 lists only `external_python` and `external_zstd`. Under a parallel build zstandard can run before
 `packaging` is installed and fail with `ModuleNotFoundError: No module named 'packaging'`. numpy and
 cython (also built as separate externals) already declare this edge; zstandard should too.
+
+### 0009 - Cycles: instanced objects invisible in BVH2 on aarch64 GCC builds  [r2; a real bug fix]
+`BVH2::pack_instances` copied each leaf of an instanced object's BVH and patched `.x`/`.y` in place.
+`int4` is an sse2neon `__m128i` union on aarch64, and GCC 14 (-O2) compiled that as a 64-bit
+`add v.2s` followed by a 128-bit store - the 64-bit-form add zeroes the upper half of the register,
+so every merged leaf was stored with visibility = 0 and primitive type = 0. Traversal then matched no
+primitive type and silently skipped the triangles: linked duplicates, motion-blurred objects and SSS
+objects (all kept instanced) were invisible on CUDA, and on CPU when forced to the BVH2 layout.
+Embree (normal CPU), OptiX/HIP-RT/Metal-RT, clang and x86 builds never run or never miscompile this
+code, which is why it slipped through. The fix builds the leaf with `make_int4(...)` from explicit lanes.
+Proof: `verify/cycles_instancing_test.py` (fails on the first 5.2.2 build, passes with 0009); the Open
+Data classroom/junkshop/monster scenes now render on GPU as on CPU.
+
+### 0010 + 0011 - Cycles CUDA: sm_110 launch bounds for the BVH intersect and shade kernels  [r2; perf]
+On Thor the BVH intersect kernels are latency-bound with too few warps in flight (ncu: 15% achieved
+occupancy vs 33% register-limited). 0010 adds opt-in knobs (unset = stock); 0011 makes the measured
+best the sm_110 default: intersect closest/shadow in 64-thread blocks capped at 64 registers,
+shade_surface capped at 80 registers. Define `THOR_STOCK_LAUNCH_BOUNDS` to build stock kernels; the
+release also ships the stock cubin as `kernel_sm_110.cubin.zst.stock`. Every other architecture is
+untouched. Measured on Thor with 0009 applied: Open Data +20/+39/+37% (monster/junkshop/classroom),
+fixed-sample renders 1.04-1.35x on 7 scenes (incl. hair, volumes, SSS, motion blur), never slower;
+images match stock within stock-vs-stock run-to-run noise.
+
+## Post-build step (r2): jemalloc - recipe/25-jemalloc.sh
+Adds `libjemalloc.so.2` as blender's first `DT_NEEDED` (patchelf) and bundles it in `lib/`, so malloc
+and new/delete go to jemalloc instead of oneTBB's `libtbbmalloc_proxy`. Why: Cycles' parallel loading
+of packed images livelocked inside tbbmalloc on Thor (scene prep stalls of 1-330 s on image-heavy
+scenes; 8 of 16 junkshop runs). With jemalloc: 0 of 24 runs stalled, render speed unchanged, peak RSS
+about 10% lower. Re-run the script after every rebuild (ninja relinks the binary).
+
+## Packaging step (r2): recipe/40-package.sh + recipe/sanitize_tree.py
+A build tree embeds the builder's home directory all over (RUNPATHs, debug info, compiled OSL shaders,
+Python sysconfig and bytecode caches, even inside the zstd-compressed Cycles kernels) and `tar` records
+the builder's user name. The packager drops `__pycache__`, strips ELF debug info, rewrites the home
+prefix to a same-length placeholder (inside compressed files too), sets blender's RUNPATH to
+`$ORIGIN/lib`, writes root-owned tar entries, and refuses to pack if the home path or user name is
+still found anywhere. The r2 tarball was produced with it.
 
 ## Dropped vs the 4.5.13 recipe (obsolete upstream)
 - **sqlite autoreconf patch** - sqlite 3.51.x switched to the TCL `autosetup` build system (no

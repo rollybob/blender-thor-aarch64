@@ -20,7 +20,7 @@ against the GCC-13-built deps is safe (verified end-to-end).
 ```
 sudo apt install -y build-essential gcc-14 g++-14 git git-lfs cmake ninja-build meson \
   autoconf automake libtool bison flex yasm nasm tcl python3-mako patchelf help2man \
-  pkg-config ccache autopoint gettext texinfo \
+  pkg-config ccache autopoint gettext texinfo libjemalloc2 \
   libasound2-dev libpulse-dev libxt-dev libinput-dev libdrm-dev \
   gcc-arm-linux-gnueabihf libc6-dev-armhf-cross \
   libx11-dev libxi-dev libxxf86vm-dev libxfixes-dev libxrender-dev libgl1-mesa-dev

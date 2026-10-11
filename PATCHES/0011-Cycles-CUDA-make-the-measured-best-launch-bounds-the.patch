@@ -1,0 +1,73 @@
+From f8528824ee48cd85c971c27e766dd0e7b10c1683 Mon Sep 17 00:00:00 2001
+From: Thor aarch64 build <thor-build@localhost>
+Date: Sat, 10 Oct 2026 20:38:29 -0400
+Subject: [PATCH 11/11] Cycles CUDA: make the measured-best launch bounds the
+ sm_110 default
+
+sm_110 (Jetson Thor) device builds now define THOR_INTERSECT_MIN_BLOCKS=16 (intersect
+closest/shadow: 64-thread blocks, 64 regs) and THOR_SHADE_BLOCK=384 /
+THOR_SHADE_MIN_BLOCKS=2 (shade_surface: 80 regs) unless THOR_STOCK_LAUNCH_BOUNDS is
+defined. Every other architecture keeps the stock declarations.
+
+The ninja-built kernel_sm_110.cubin has the same resources as the hand-built "s85" variant
+that was benchmarked (64/64/80 regs, stack 1072/1872/7024 B) and byte-identical SASS for
+both intersect kernels; the shade kernels differ only by nvcc build-to-build layout, which
+also differs between any two builds of unchanged kernels. Open Data (with 0009 applied):
++20/+39/+37% (monster/junkshop/classroom), total +30%.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ intern/cycles/kernel/device/cuda/config.h | 21 ++++++++++++++++++---
+ intern/cycles/kernel/device/gpu/kernel.h  |  4 ++--
+ 2 files changed, 20 insertions(+), 5 deletions(-)
+
+diff --git a/intern/cycles/kernel/device/cuda/config.h b/intern/cycles/kernel/device/cuda/config.h
+index 8fee2f0cc9a..3ffc9ce46dc 100644
+--- a/intern/cycles/kernel/device/cuda/config.h
++++ b/intern/cycles/kernel/device/cuda/config.h
+@@ -45,9 +45,24 @@
+ #  error "Unknown or unsupported CUDA architecture, can't determine launch bounds"
+ #endif
+ 
+-/* THOR experiment, compile-time opt-in: 64-thread blocks with a minimum of N resident blocks
+- * per SM for the BVH intersect kernels, i.e. a register cap of 65536 / (64 * N) -> more warps in flight to hide
+- * the memory latency ncu shows (junkshop: 15% achieved occupancy, long_scoreboard dominant). Unset = stock. */
++/* THOR launch bounds: 64-thread blocks with a minimum of N resident blocks per SM for the BVH
++ * intersect kernels, i.e. a register cap of 65536 / (64 * N) -> more warps in flight to hide the memory latency
++ * ncu shows (junkshop: 15% achieved occupancy, long_scoreboard dominant). Default on sm_110 (below); any other
++ * architecture, or THOR_STOCK_LAUNCH_BOUNDS, keeps the stock declarations. */
++/* THOR default: sm_110 (Jetson Thor) builds get the measured-best launch bounds ("s85")
++ * unless THOR_STOCK_LAUNCH_BOUNDS is defined: intersect closest/shadow (64,16) = 64 regs, shade_surface
++ * (384,2) = 80 regs. Open Data +46/+60/+41% (monster/junkshop/classroom); image differences stay at
++ * stock run-to-run noise (~4e-4 of the scenes' Monte Carlo seed noise, bias ~1e-9). */
++#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 1100 && !defined(THOR_STOCK_LAUNCH_BOUNDS)
++#  ifndef THOR_INTERSECT_MIN_BLOCKS
++#    define THOR_INTERSECT_MIN_BLOCKS 16
++#  endif
++#  if !defined(THOR_SHADE_BLOCK) && !defined(THOR_SHADE_MIN_BLOCKS)
++#    define THOR_SHADE_BLOCK 384
++#    define THOR_SHADE_MIN_BLOCKS 2
++#  endif
++#endif
++
+ #ifdef THOR_INTERSECT_MIN_BLOCKS
+ #  define ccl_gpu_kernel_thor_intersect \
+     extern "C" __global__ void __launch_bounds__(64, THOR_INTERSECT_MIN_BLOCKS)
+diff --git a/intern/cycles/kernel/device/gpu/kernel.h b/intern/cycles/kernel/device/gpu/kernel.h
+index 96b533ec70b..272ec21a83b 100644
+--- a/intern/cycles/kernel/device/gpu/kernel.h
++++ b/intern/cycles/kernel/device/gpu/kernel.h
+@@ -155,8 +155,8 @@ ccl_gpu_kernel_postfix
+ #    include "kernel/device/oneapi/context_intersect_begin.h"
+ #  endif
+ 
+-/* THOR experiment: the two hot BVH intersect kernels can get their own launch bounds
+- * (see cuda/config.h). Every other backend / unset = the stock declaration. */
++/* THOR: the two hot BVH intersect kernels and shade_surface can get their own launch bounds
++ * (see cuda/config.h; default on sm_110). Every other backend / architecture = the stock declaration. */
+ #ifndef ccl_gpu_kernel_thor_intersect
+ #  define ccl_gpu_kernel_thor_intersect ccl_gpu_kernel(GPU_KERNEL_BLOCK_NUM_THREADS, GPU_KERNEL_MAX_REGISTERS)
+ #endif
+-- 
+2.43.0
+

@@ -174,3 +174,138 @@ index 4719eb4b87e..3155e042f32 100644
    set_and_warn_library_found("FFmpeg" FFMPEG_FOUND WITH_CODEC_FFMPEG)
  endif()
  
+diff --git a/intern/cycles/bvh/bvh2.cpp b/intern/cycles/bvh/bvh2.cpp
+index 24df34f6383..b086fcdbb51 100644
+--- a/intern/cycles/bvh/bvh2.cpp
++++ b/intern/cycles/bvh/bvh2.cpp
+@@ -588,10 +588,13 @@ void BVH2::pack_instances(size_t nodes_size, size_t leaf_nodes_size)
+       int4 *leaf_nodes_offset = bvh->pack.leaf_nodes.data();
+       const size_t leaf_nodes_offset_size = bvh->pack.leaf_nodes.size();
+       for (size_t i = 0; i < leaf_nodes_offset_size; i += BVH_NODE_LEAF_SIZE) {
+-        int4 data = leaf_nodes_offset[i];
+-        data.x += prim_offset;
+-        data.y += prim_offset;
+-        pack_leaf_nodes[pack_leaf_nodes_offset] = data;
++        /* Build the merged leaf from explicit lanes instead of patching .x/.y of a copy in place:
++         * GCC 14 on aarch64 (int4 = sse2neon __m128i union) vectorized the in-place version as a
++         * 64-bit `add v.2s` followed by a 128-bit store, which zeroes .z (visibility) and .w
++         * (primitive type) of every instanced leaf -> all instanced objects invisible in BVH2. */
++        const int4 src = leaf_nodes_offset[i];
++        pack_leaf_nodes[pack_leaf_nodes_offset] = make_int4(
++            src.x + int(prim_offset), src.y + int(prim_offset), src.z, src.w);
+         for (int j = 1; j < BVH_NODE_LEAF_SIZE; ++j) {
+           pack_leaf_nodes[pack_leaf_nodes_offset + j] = leaf_nodes_offset[i + j];
+         }
+diff --git a/intern/cycles/device/cuda/kernel.cpp b/intern/cycles/device/cuda/kernel.cpp
+index 0ca33d0a190..6755c19ac62 100644
+--- a/intern/cycles/device/cuda/kernel.cpp
++++ b/intern/cycles/device/cuda/kernel.cpp
+@@ -7,6 +7,10 @@
+ #  include "device/cuda/kernel.h"
+ #  include "device/cuda/device_impl.h"
+ 
++#  include <cstdlib>
++
++#  include "util/string.h"
++
+ CCL_NAMESPACE_BEGIN
+ 
+ void CUDADeviceKernels::load(CUDADevice *device)
+@@ -32,6 +36,18 @@ void CUDADeviceKernels::load(CUDADevice *device)
+           device,
+           cuOccupancyMaxPotentialBlockSize(
+               &kernel.min_blocks, &kernel.num_threads_per_block, kernel.function, nullptr, 0, 0));
++
++      /* THOR experiment, opt-in: smaller blocks for the BVH intersect kernels.
++       * Divergent rays keep a whole block resident until its slowest warp finishes, so on Thor
++       * achieved occupancy is half the register-limited maximum (ncu: 15% vs 33% on junkshop).
++       * These kernels use no shared memory, so any multiple of 32 is valid. Unset = stock. */
++      const char *thor_block = getenv("CYCLES_CUDA_INTERSECT_BLOCK");
++      if (thor_block && string_startswith(function_name, "kernel_gpu_integrator_intersect_")) {
++        const int block = atoi(thor_block);
++        if (block >= 32 && block % 32 == 0 && block <= kernel.num_threads_per_block) {
++          kernel.num_threads_per_block = block;
++        }
++      }
+     }
+     else {
+       LOG_ERROR << "Unable to load kernel " << function_name;
+diff --git a/intern/cycles/kernel/device/cuda/config.h b/intern/cycles/kernel/device/cuda/config.h
+index 2fda2a6c4dc..3ffc9ce46dc 100644
+--- a/intern/cycles/kernel/device/cuda/config.h
++++ b/intern/cycles/kernel/device/cuda/config.h
+@@ -45,6 +45,34 @@
+ #  error "Unknown or unsupported CUDA architecture, can't determine launch bounds"
+ #endif
+ 
++/* THOR launch bounds: 64-thread blocks with a minimum of N resident blocks per SM for the BVH
++ * intersect kernels, i.e. a register cap of 65536 / (64 * N) -> more warps in flight to hide the memory latency
++ * ncu shows (junkshop: 15% achieved occupancy, long_scoreboard dominant). Default on sm_110 (below); any other
++ * architecture, or THOR_STOCK_LAUNCH_BOUNDS, keeps the stock declarations. */
++/* THOR default: sm_110 (Jetson Thor) builds get the measured-best launch bounds ("s85")
++ * unless THOR_STOCK_LAUNCH_BOUNDS is defined: intersect closest/shadow (64,16) = 64 regs, shade_surface
++ * (384,2) = 80 regs. Open Data +46/+60/+41% (monster/junkshop/classroom); image differences stay at
++ * stock run-to-run noise (~4e-4 of the scenes' Monte Carlo seed noise, bias ~1e-9). */
++#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 1100 && !defined(THOR_STOCK_LAUNCH_BOUNDS)
++#  ifndef THOR_INTERSECT_MIN_BLOCKS
++#    define THOR_INTERSECT_MIN_BLOCKS 16
++#  endif
++#  if !defined(THOR_SHADE_BLOCK) && !defined(THOR_SHADE_MIN_BLOCKS)
++#    define THOR_SHADE_BLOCK 384
++#    define THOR_SHADE_MIN_BLOCKS 2
++#  endif
++#endif
++
++#ifdef THOR_INTERSECT_MIN_BLOCKS
++#  define ccl_gpu_kernel_thor_intersect \
++    extern "C" __global__ void __launch_bounds__(64, THOR_INTERSECT_MIN_BLOCKS)
++#endif
++/* Same idea for integrator_shade_surface (stock: 162 regs, 384-thread blocks -> 12 warps/SM). */
++#if defined(THOR_SHADE_BLOCK) && defined(THOR_SHADE_MIN_BLOCKS)
++#  define ccl_gpu_kernel_thor_shade \
++    extern "C" __global__ void __launch_bounds__(THOR_SHADE_BLOCK, THOR_SHADE_MIN_BLOCKS)
++#endif
++
+ /* Compute number of threads per block and minimum blocks per multiprocessor
+  * given the maximum number of registers per thread. */
+ #define ccl_gpu_kernel(block_num_threads, thread_num_registers) \
+diff --git a/intern/cycles/kernel/device/gpu/kernel.h b/intern/cycles/kernel/device/gpu/kernel.h
+index 784b1fad284..272ec21a83b 100644
+--- a/intern/cycles/kernel/device/gpu/kernel.h
++++ b/intern/cycles/kernel/device/gpu/kernel.h
+@@ -155,7 +155,16 @@ ccl_gpu_kernel_postfix
+ #    include "kernel/device/oneapi/context_intersect_begin.h"
+ #  endif
+ 
+-ccl_gpu_kernel(GPU_KERNEL_BLOCK_NUM_THREADS, GPU_KERNEL_MAX_REGISTERS)
++/* THOR: the two hot BVH intersect kernels and shade_surface can get their own launch bounds
++ * (see cuda/config.h; default on sm_110). Every other backend / architecture = the stock declaration. */
++#ifndef ccl_gpu_kernel_thor_intersect
++#  define ccl_gpu_kernel_thor_intersect ccl_gpu_kernel(GPU_KERNEL_BLOCK_NUM_THREADS, GPU_KERNEL_MAX_REGISTERS)
++#endif
++#ifndef ccl_gpu_kernel_thor_shade
++#  define ccl_gpu_kernel_thor_shade ccl_gpu_kernel(GPU_KERNEL_BLOCK_NUM_THREADS, GPU_KERNEL_MAX_REGISTERS)
++#endif
++
++ccl_gpu_kernel_thor_intersect
+     ccl_gpu_kernel_signature(integrator_intersect_closest,
+                              const ccl_global int *path_index_array,
+                              ccl_global float *render_buffer,
+@@ -170,7 +179,7 @@ ccl_gpu_kernel(GPU_KERNEL_BLOCK_NUM_THREADS, GPU_KERNEL_MAX_REGISTERS)
+ }
+ ccl_gpu_kernel_postfix
+ 
+-ccl_gpu_kernel(GPU_KERNEL_BLOCK_NUM_THREADS, GPU_KERNEL_MAX_REGISTERS)
++ccl_gpu_kernel_thor_intersect
+     ccl_gpu_kernel_signature(integrator_intersect_shadow,
+                              const ccl_global int *path_index_array,
+                              const int work_size)
+@@ -310,7 +319,7 @@ ccl_gpu_kernel(GPU_KERNEL_BLOCK_NUM_THREADS, GPU_KERNEL_MAX_REGISTERS)
+ }
+ ccl_gpu_kernel_postfix
+ 
+-ccl_gpu_kernel(GPU_KERNEL_BLOCK_NUM_THREADS, GPU_KERNEL_MAX_REGISTERS)
++ccl_gpu_kernel_thor_shade
+     ccl_gpu_kernel_signature(integrator_shade_surface,
+                              const ccl_global int *path_index_array,
+                              ccl_global float *render_buffer,
