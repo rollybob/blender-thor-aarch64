@@ -3,7 +3,7 @@
 **r2 replaces the first 5.2.2 download - please update.** That build rendered *instanced* objects
 (linked duplicates, motion-blurred objects, subsurface-scattering materials) **invisible on the GPU**
 in Cycles CUDA - for example the Open Data "classroom" scene lost all of its desks and chairs and
-"monster" lost the monster. Cause: a GCC 14 aarch64 miscompile in Cycles' BVH2 packer (details in
+"monster" lost the monster. Cause: a GCC 14.1/14.2 aarch64 miscompile (Ubuntu 24.04's `g++-14`) in Cycles' BVH2 packer (details in
 `CHANGES-vs-upstream.md`, patch 0009). CPU renders, EEVEE and the 4.5.13 release were not affected.
 Check any build with `blender -b --factory-startup -P verify/cycles_instancing_test.py`.
 

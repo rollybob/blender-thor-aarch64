@@ -1,6 +1,6 @@
 # GPU vs CPU check for objects Cycles keeps INSTANCED (not baked into the scene BVH): linked duplicates,
 # object motion blur, subsurface-scattering materials. The first 5.2.2 build of this recipe rendered all of
-# them INVISIBLE on CUDA (GCC 14 aarch64 miscompile in BVH2::pack_instances, fixed by PATCHES/0009).
+# them INVISIBLE on CUDA (GCC 14.1/14.2 aarch64 miscompile in BVH2::pack_instances, fixed by PATCHES/0009).
 # Each case renders floor + one test object on GPU (CUDA) and CPU; coverage = fraction of pixels the object
 # changes vs a floor-only render. A case FAILS if CPU sees the object but GPU coverage is < 25% of CPU's.
 #   blender -b --factory-startup -P verify/cycles_instancing_test.py

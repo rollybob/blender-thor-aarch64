@@ -14,8 +14,8 @@ aarch64 Blender gives you:
 
 > **Update 2026-10-11 - please use release `r2`.** The first 5.2.2 download rendered *instanced* objects
 > (linked duplicates, motion-blurred objects, subsurface-scattering materials) **invisible on the GPU**
-> (Cycles CUDA) - e.g. the Open Data "classroom" scene lost all its desks and chairs. Cause: a GCC 14
-> aarch64 miscompile in Cycles' BVH2 packer; fixed by `PATCHES/0009`. CPU and EEVEE renders were not
+> (Cycles CUDA) - e.g. the Open Data "classroom" scene lost all its desks and chairs. Cause: a GCC 14.1/14.2
+> aarch64 miscompile in Cycles' BVH2 packer (Ubuntu 24.04's `g++-14` is 14.2); fixed by `PATCHES/0009`. CPU and EEVEE renders were not
 > affected, nor is the 4.5.13 release. `verify/cycles_instancing_test.py` checks any build for it.
 > r2 also brings tuned sm_110 Cycles kernels (Open Data +30% on Thor) and jemalloc (no scene-load stalls).
 
@@ -76,6 +76,8 @@ silently to CPU if built wrong. Runtime proofs in `verify/`:
 - `blender --gpu-backend vulkan -b -P verify/eevee_headless_test.py` - same, on the Vulkan backend.
 - `blender -b --factory-startup -P verify/cycles_instancing_test.py` - linked duplicates, motion blur and
   SSS objects render on the GPU exactly as on the CPU (`RESULT: OK`). The first 5.2.2 build fails this.
+- `g++-14 -O2 -o check verify/gcc_slp_union_check.cpp && ./check` - does YOUR compiler have the GCC 14.1/14.2
+  aarch64 bug behind it? Prints `OK` or `FAIL: .z/.w lost` (no Blender needed).
 
 ## What's different from stock, and why
 See `CHANGES-vs-upstream.md` for a per-patch explanation. Short version: small `.cmake` fixes for
@@ -84,7 +86,7 @@ most are CPU-OSL (disabling the broken OptiX shadeops path on ARM) and GPU-OIDN 
 `OIDN_DEVICE_CUDA_API=RuntimeStatic` with sm_110 arch fixups (dodging a silent
 `__cudaLaunchKernel` dlopen failure). Vulkan / HarfBuzz / FriBidi are configure flags in
 `recipe/20-blender.sh`, not source patches. Since r2: `0009` fixes instanced objects vanishing on the
-GPU (GCC 14 aarch64 miscompile), `0010`/`0011` tune the sm_110 Cycles kernels' launch bounds, and
+GPU (GCC 14.1/14.2 aarch64 miscompile), `0010`/`0011` tune the sm_110 Cycles kernels' launch bounds, and
 `recipe/25-jemalloc.sh` swaps oneTBB's malloc proxy for jemalloc.
 
 ## Licensing

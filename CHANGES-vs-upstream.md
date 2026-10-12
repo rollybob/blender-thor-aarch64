@@ -63,13 +63,19 @@ cython (also built as separate externals) already declare this edge; zstandard s
 
 ### 0009 - Cycles: instanced objects invisible in BVH2 on aarch64 GCC builds  [r2; a real bug fix]
 `BVH2::pack_instances` copied each leaf of an instanced object's BVH and patched `.x`/`.y` in place.
-`int4` is an sse2neon `__m128i` union on aarch64, and GCC 14 (-O2) compiled that as a 64-bit
+`int4` is an sse2neon `__m128i` union on aarch64, and GCC 14.2 (-O2/-O3) compiled that as a 64-bit
 `add v.2s` followed by a 128-bit store - the 64-bit-form add zeroes the upper half of the register,
 so every merged leaf was stored with visibility = 0 and primitive type = 0. Traversal then matched no
 primitive type and silently skipped the triangles: linked duplicates, motion-blurred objects and SSS
 objects (all kept instanced) were invisible on CUDA, and on CPU when forced to the BVH2 layout.
-Embree (normal CPU), OptiX/HIP-RT/Metal-RT, clang and x86 builds never run or never miscompile this
-code, which is why it slipped through. The fix builds the leaf with `make_int4(...)` from explicit lanes.
+Only BVH2 render paths read these leaves (CUDA without OptiX, CPU without Embree, HIP without HIP-RT),
+which is why it slipped through. The fix builds the leaf with `make_int4(...)` from explicit lanes.
+Compilers, tested with the standalone `verify/gcc_slp_union_check.cpp` (aarch64): GCC 14.2.0 (Ubuntu
+24.04's `g++-14`) FAILS at -O2/-O3; GCC 13.3, 14.4, 15.3 and clang 18 are correct. The culprit is GCC's
+SLP vectorizer (`-fno-tree-slp-vectorize` avoids it); it needs the union write-ints/read-vector pattern
+(a defaulted copy or a plain struct compiles correctly). Independently found and documented at
+github.com/aliaholes/gcc14-aarch64-zeroed-lanes, which also reports 14.1 affected and 14.3 fixed. So
+with GCC >= 14.3 this patch is not needed, but it is harmless and keeps any GCC 14 build safe.
 Proof: `verify/cycles_instancing_test.py` (fails on the first 5.2.2 build, passes with 0009); the Open
 Data classroom/junkshop/monster scenes now render on GPU as on CPU.
 

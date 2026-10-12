@@ -10,6 +10,10 @@ Other sm_90+ CUDA-13 aarch64 hosts *should* work (the Cycles kernels ship native
 compute_90 PTX), but only Thor is verified. **Jetson Orin (sm_87) is NOT supported** by this recipe.
 
 ## Compiler: Blender 5.2 requires GCC >= 14
+> **Known bug:** Ubuntu 24.04's `g++-14` is 14.2.0, which miscompiles Cycles' BVH2 instance packing on
+> aarch64 (instanced objects vanish from GPU renders). `PATCHES/0009` works around it; GCC >= 14.3 does not
+> have the bug. Check a compiler with `verify/gcc_slp_union_check.cpp` (see README).
+
 Ubuntu 24.04's default is GCC 13, but Blender 5.2's `CMakeLists.txt` hard-rejects anything below
 GCC 14. Install `gcc-14`/`g++-14` (below). The dependency stack (`10-deps.sh`) builds fine with the
 system GCC 13; only Blender itself (`20-blender.sh`) is built with GCC 14, which the script pins via
